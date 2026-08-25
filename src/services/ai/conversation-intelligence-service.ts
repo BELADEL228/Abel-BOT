@@ -183,14 +183,18 @@ export class ConversationIntelligenceService {
     const extractionPrompt =
       `Tu es un analyste expert de conversations WhatsApp.\n` +
       `Analyse les messages suivants du groupe et retourne UNIQUEMENT un objet JSON valide sans balises Markdown.\n\n` +
+      `RÈGLES STRICTES POUR narrativeSummary :\n` +
+      `- INTERDIT : tableaux (| col | col |), titres (#, ##, ###), séparateurs (---), gras Markdown (**texte**), italique Markdown (*texte*).\n` +
+      `- AUTORISÉ : émojis, tirets simples (•), retours à la ligne \\n, italique WhatsApp (_texte_), gras WhatsApp (*texte*).\n` +
+      `- Rédige en paragraphes courts OU en points à tirets clairs. Maximum 6-8 points. Pas de tableau chronologique.\n\n` +
       `INSTRUCTIONS D'ANALYSE :\n` +
-      `1. "narrativeSummary" : Rédige une synthèse narrative vivante, claire et fidèle (2 à 4 paragraphes courts ou points structurés) expliquant l'essentiel des échanges : les discussions en cours, les avis partagés, les anecdotes, le fil conducteur du groupe.\n` +
-      `2. "subjects" : Liste les 2 à 5 sujets majeurs abordés avec une estimation en pourcentage (ex: 40%).\n` +
-      `3. "decisions" : Décisions claires ou accords trouvés (laisser [] si aucune décision explicite).\n` +
-      `4. "tasks" : Tâches ou actions convenues avec responsable et échéance si mentionnés (laisser [] si aucune).\n` +
-      `5. "deadlines" : Événements avec date/heure (laisser [] si aucune).\n` +
-      `6. "questions" : Questions posées restées sans réponse ou questions importantes répondues.\n` +
-      `7. "attentionPoints" : Alertes, points de vigilance ou tensions (laisser [] si rien de particulier).\n\n` +
+      `1. "narrativeSummary" : Synthèse vivante et fidèle en français (points à tirets ou courts paragraphes). Explique qui a parlé de quoi et les points clés. AUCUN tableau ni syntaxe Markdown GitHub.\n` +
+      `2. "subjects" : 2 à 5 sujets majeurs avec estimation en pourcentage (ex: 40%).\n` +
+      `3. "decisions" : Décisions claires ou accords ([] si aucune).\n` +
+      `4. "tasks" : Tâches avec responsable et échéance ([] si aucune).\n` +
+      `5. "deadlines" : Événements avec date/heure ([] si aucune).\n` +
+      `6. "questions" : Questions sans réponse ou importantes répondues.\n` +
+      `7. "attentionPoints" : Alertes ou tensions ([] si rien de particulier).\n\n` +
       `FORMAT JSON ATTENDU :\n` +
       `{\n` +
       `  "narrativeSummary": "...",\n` +
@@ -228,10 +232,14 @@ export class ConversationIntelligenceService {
         // Fallback: direct narrative summary
         const narrativePrompt =
           `Voici les messages récents d'un groupe WhatsApp :\n\n${historyText}\n\n` +
-          `Fais un résumé clair, vivant et structuré en français de tout ce qui a été dit. Explique qui a parlé de quoi et les points essentiels.`;
+          `Fais un résumé clair en français avec des tirets (•) ou courts paragraphes.\n` +
+          `INTERDIT : tableaux (| col |), titres (#), séparateurs (---), gras Markdown (**texte**).\n` +
+          `AUTORISÉ : émojis, tirets •, gras WhatsApp *texte*, italique WhatsApp _texte_.`;
         const directText = await aiService.generateText(narrativePrompt);
         narrative = AIService.cleanAiOutput(directText);
       }
+      // Sanitize any residual Markdown that the AI still produced
+      narrative = ConversationIntelligenceService.sanitizeForWhatsApp(narrative);
 
       const analysis: ConversationAnalysis = {
         narrativeSummary: narrative,
@@ -266,8 +274,12 @@ export class ConversationIntelligenceService {
       try {
         const fallbackPrompt =
           `Voici une conversation WhatsApp de groupe :\n\n${historyText}\n\n` +
-          `Fais un résumé complet et fidèle des échanges du groupe en français avec des tirets ou paragraphes clairs.`;
-        fallbackNarrative = AIService.cleanAiOutput(await aiService.generateText(fallbackPrompt));
+          `Fais un résumé complet et fidèle en français avec des tirets (•) ou courts paragraphes.\n` +
+          `INTERDIT : tableaux (| col |), titres (#), séparateurs (---), gras Markdown (**texte**).\n` +
+          `AUTORISÉ : émojis, tirets •, gras WhatsApp *texte*, italique WhatsApp _texte_.`;
+        fallbackNarrative = ConversationIntelligenceService.sanitizeForWhatsApp(
+          AIService.cleanAiOutput(await aiService.generateText(fallbackPrompt))
+        );
       } catch {
         fallbackNarrative = 'Discussion de groupe portant sur plusieurs sujets récents.';
       }
@@ -301,6 +313,34 @@ export class ConversationIntelligenceService {
       participantCount: participants, messageCount: msgCount,
       periodStart: start, periodEnd: end
     };
+  }
+
+  /**
+   * Remove GitHub Markdown syntax that doesn't render in WhatsApp:
+   * tables, ATX headings (#), setext separators (---/===), bold (**), italic (*), HTML.
+   */
+  public static sanitizeForWhatsApp(text: string): string {
+    if (!text) return text;
+    let out = text
+      // Remove markdown table rows (lines containing | … | patterns)
+      .replace(/^\|.*\|.*$/gm, '')
+      // Remove table separator lines (|---|---| or |:---:|:---:|)
+      .replace(/^\|[-: |]+\|\s*$/gm, '')
+      // Remove ATX headings (# Title, ## Title, ### Title)
+      .replace(/^#{1,6}\s+/gm, '')
+      // Remove setext heading underlines (=== or ---)
+      .replace(/^[=\-]{3,}\s*$/gm, '')
+      // Convert **bold** → *bold* (WhatsApp bold)
+      .replace(/\*\*([^*]+)\*\*/g, '*$1*')
+      // Convert __bold__ → *bold*
+      .replace(/__([^_]+)__/g, '*$1*')
+      // Convert _italic_ → _italic_ (already WhatsApp-compatible, keep)
+      // Remove stray HTML tags
+      .replace(/<[^>]+>/g, '')
+      // Collapse more than 2 consecutive blank lines into 1
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return out;
   }
 
   // ── 5. Public: Full Group Summary ─────────────────────────────────────────
