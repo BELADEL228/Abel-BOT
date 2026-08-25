@@ -61,17 +61,34 @@ async function bootstrap() {
     }
   });
 
-  // 4b. Birthday alerts → DM to owner each morning
-  birthdayService.onAlert(async (entry) => {
+  // 4b. Birthday automated wish dispatch & owner notification
+  birthdayService.onDispatch(async (entry, formattedMessage) => {
     const main = sessionManager.getMainSession();
-    if (!main || !ownerJid) return;
-    try {
-      const msg = entry.customMessage ||
-        `🎂 *Joyeux anniversaire à ${entry.contactName} !* 🎉\n\n` +
-        `N'oublie pas de lui envoyer un message aujourd'hui ! 😊`;
-      await main.sendMessage(ownerJid, msg);
-    } catch (err) {
-      logger.error({ error: err }, '[Bootstrap] Failed to send birthday alert');
+    if (!main) return;
+
+    // 1. Envoi direct du message d'anniversaire personnalisé au destinataire
+    if (entry.autoSendDirect && entry.contactJid) {
+      try {
+        await main.sendMessage(entry.contactJid, formattedMessage);
+        logger.info(`[Bootstrap] Direct birthday wish sent to ${entry.contactName} (${entry.contactJid})`);
+      } catch (err) {
+        logger.error({ error: err }, `[Bootstrap] Failed to send direct birthday message to ${entry.contactJid}`);
+      }
+    }
+
+    // 2. Notification de confirmation envoyée au propriétaire
+    if (ownerJid) {
+      try {
+        await main.sendMessage(
+          ownerJid,
+          `🎂 *SOUHAIT D'ANNIVERSAIRE ENVOYÉ !* 🎉\n\n` +
+          `👤 *Destinataire :* ${entry.contactName} (\`${entry.contactJid.replace('@s.whatsapp.net', '')}\`)\n` +
+          `💌 *Mode :* ${entry.autoSendDirect ? 'Envoi direct au contact' : 'Rappel seulement'}\n\n` +
+          `💬 *Message envoyé :*\n${formattedMessage}`
+        );
+      } catch (err) {
+        logger.error({ error: err }, '[Bootstrap] Failed to notify owner about birthday');
+      }
     }
   });
 

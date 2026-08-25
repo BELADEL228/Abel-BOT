@@ -250,3 +250,25 @@ model ChatMessage {
   @@index([timestamp])
   @@index([chatJid, timestamp])  // Index composé pour les requêtes combinées
 }
+
+// ─── GESTION DES ANNIVERSAIRES & SOUHAITS AUTOMATIQUES ─────────────────────
+
+model Birthday {
+  id               String    @id @default(uuid())
+  ownerJid         String
+  contactJid       String
+  contactName      String
+  day              Int       // 1-31
+  month            Int       // 1-12
+  year             Int?      // Optionnel (pour calculer l'âge)
+  customMessage    String?   // Message programmé spécifiquement pour la personne
+  autoSendDirect   Boolean   @default(true) // Envoi direct au contact
+  sendHour         Int       @default(8)    // Heure d'envoi (ex: 8h00 ou 0h00)
+  lastSentYear     Int?      // Année du dernier envoi (évite les doublons)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([ownerJid, contactJid])
+  @@index([day, month])
+  @@map("birthdays")
+}
