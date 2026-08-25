@@ -91,6 +91,24 @@ export class SessionManager {
     }
 
     const sessionDir = path.resolve(this.sessionsBaseDir, cleanId);
+    // If session directory exists but was not successfully registered, wipe it to ensure fresh keys
+    if (fs.existsSync(sessionDir)) {
+      const credsPath = path.join(sessionDir, 'creds.json');
+      let isRegistered = false;
+      if (fs.existsSync(credsPath)) {
+        try {
+          const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+          isRegistered = Boolean(creds.registered);
+        } catch {
+          // ignore
+        }
+      }
+      if (!isRegistered) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        fs.mkdirSync(sessionDir, { recursive: true });
+      }
+    }
+
     provider = new BaileysProvider(cleanId, sessionDir);
     this.sessions.set(cleanId, provider);
 

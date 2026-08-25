@@ -110,19 +110,21 @@ const SessionsCommand: IPluginCommand = {
         }
 
         const { code } = result;
+        const rawOnly = code.replace(/-/g, '');
         const targetJid = `${phoneNumber.replace(/\D/g, '')}@s.whatsapp.net`;
 
         // ── ENVOI DU CODE AU NUMÉRO CIBLE ──
         const directMessage =
           `👋 *Bonjour !* Tu as demandé à lier ton compte WhatsApp à l'assistant *${config.botName}*.\n\n` +
           `🔑 *TON CODE DE CONNEXION :*\n` +
-          `👉 \`\`\`${code}\`\`\` 👈\n\n` +
-          `📋 *COMMENT FAIRE :*\n` +
-          `1. Va dans tes *Paramètres WhatsApp*\n` +
-          `2. Sélectionne *Appareils connectés*\n` +
+          `👉 \`\`\`${rawOnly}\`\`\` 👈\n` +
+          `_(Format avec tiret : \`${code}\`)_\n\n` +
+          `📋 *COMMENT VALIDER (En moins de 60s) :*\n` +
+          `1. Clique sur la notification WhatsApp qui vient d'apparaître sur ton écran, OU :\n` +
+          `2. Va dans *Paramètres WhatsApp* > *Appareils connectés*\n` +
           `3. Appuie sur *Connecter un appareil*\n` +
-          `4. Choisis *"Se connecter avec un numéro"* en bas\n` +
-          `5. Saisis le code ci-dessus.\n\n` +
+          `4. Choisis *"Se connecter avec un numéro de téléphone"* en bas de l'écran du scanner QR\n` +
+          `5. Saisis le code de 8 caractères : \`${rawOnly}\`\n\n` +
           `⚠️ _Ce code expire dans 60 secondes._`;
 
         // Tentative d'envoi direct au numéro concerné
