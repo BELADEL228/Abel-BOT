@@ -115,7 +115,7 @@ async function downloadViaYtDlp(
 
   const format = options.customFormat || (options.audioOnly
     ? 'bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best'
-    : 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best');
+    : 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/hd/sd/best');
 
   try {
     logger.info(`[MediaDownloader] yt-dlp downloading: ${targetUrl}`);
@@ -170,7 +170,37 @@ export class MediaDownloaderService {
 
     logger.info(`[MediaDownloader] Downloading Facebook: ${fbUrl} (audioOnly: ${audioOnly})`);
 
-    // Tier 1: yt-dlp direct
+    // Tier 1: SnapSave / SnapCDN HD & SD Extractor (Garantit une vidéo H.264 + AAC complète sans écran noir)
+    try {
+      const snapApi = `https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`;
+      const res = await fetch(snapApi, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(() => null);
+      if (res && res.ok) {
+        const data: any = await res.json().catch(() => null);
+        const downloads: any[] = data?.data?.downloads || [];
+        // Préférer la qualité HD 720p puis SD 360p
+        const hdItem = downloads.find((d: any) => d.quality?.includes('HD') || d.quality?.includes('720p'));
+        const sdItem = downloads.find((d: any) => d.quality?.includes('SD') || d.quality?.includes('360p'));
+        const targetUrl = hdItem?.url || sdItem?.url || downloads[0]?.url || data?.data?.video_hd || data?.data?.video_sd;
+
+        if (targetUrl) {
+          const buffer = await safeFetchBuffer(targetUrl);
+          if (buffer && buffer.length > 10_000) {
+            logger.info(`[MediaDownloader] Facebook video downloaded via SnapCDN: ${(buffer.length / (1024 * 1024)).toFixed(2)} MB`);
+            return {
+              success: true,
+              type: audioOnly ? 'audio' : 'video',
+              buffer,
+              title: data?.data?.title || 'Vidéo Facebook',
+              fileName: `facebook_${Date.now()}.${audioOnly ? 'm4a' : 'mp4'}`,
+            };
+          }
+        }
+      }
+    } catch (err: any) {
+      logger.debug(`[MediaDownloader] SnapCDN Facebook failed: ${err.message}`);
+    }
+
+    // Tier 2: yt-dlp direct avec formats progressifs combinés
     const ytdlRes = await downloadViaYtDlp(fbUrl, { audioOnly });
     if (ytdlRes && ytdlRes.buffer.length > 10_000) {
       return {
@@ -181,27 +211,6 @@ export class MediaDownloaderService {
         fileName: `facebook_${Date.now()}.${ytdlRes.ext}`,
       };
     }
-
-    // Tier 2: Fallback SnapSave / FSave API
-    try {
-      const snapApi = `https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`;
-      const res = await fetch(snapApi, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(() => null);
-      if (res && res.ok) {
-        const data: any = await res.json().catch(() => null);
-        const videoUrl = data?.data?.video_hd || data?.data?.video_sd || data?.result?.hd || data?.result?.sd;
-        if (videoUrl) {
-          const buffer = await safeFetchBuffer(videoUrl);
-          if (buffer && buffer.length > 10_000) {
-            return {
-              success: true,
-              type: audioOnly ? 'audio' : 'video',
-              buffer,
-              title: data?.data?.title || 'Vidéo Facebook',
-            };
-          }
-        }
-      }
-    } catch (_) {}
 
     return {
       success: false,
