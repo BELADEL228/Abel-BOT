@@ -2,11 +2,25 @@ import { IPluginCommand, CommandContext } from '../../core/plugin-system/types.j
 import songService from '../../services/media/song-service.js';
 import logger from '../../core/logger/logger.js';
 
+/** Map extension -> MIME type pour WhatsApp audio */
+function getMimeType(ext: string): string {
+  const map: Record<string, string> = {
+    m4a: 'audio/mp4',
+    mp4: 'audio/mp4',
+    webm: 'audio/webm',
+    ogg: 'audio/ogg',
+    opus: 'audio/ogg',
+    mp3: 'audio/mpeg',
+    aac: 'audio/aac',
+  };
+  return map[ext.toLowerCase()] ?? 'audio/mp4';
+}
+
 const SongCommand: IPluginCommand = {
   name: 'song',
   aliases: ['play', 'music', 'mp3', 'audio', 'musique', 'chanson', 'son'],
   category: 'Download',
-  description: 'Recherche et télécharge instantanément une musique en audio MP3 par son titre ou artiste.',
+  description: 'Recherche et télécharge instantanément une musique en audio par son titre ou artiste.',
   usage: '.song <titre ou artiste> (ex: .song Burna Boy City Boys)',
   cooldown: 5,
 
@@ -27,52 +41,49 @@ const SongCommand: IPluginCommand = {
     }
 
     await ctx.provider.sendPresence(ctx.chat.id, 'recording');
-    await ctx.reply(`🔍 *Recherche du morceau :* _"${query}"_...`);
+    await ctx.reply(`🔍 *Recherche et téléchargement de :* _"${query}"_...\n_Patientez quelques secondes..._`);
 
     try {
-      // 1. Recherche
-      const metadata = await songService.searchSong(query);
+      // Recherche + téléchargement en une seule étape
+      const result = await songService.findAndDownload(query);
 
-      if (!metadata) {
-        await ctx.reply(`❌ *Aucun morceau trouvé pour :* _"${query}"_.\nEssayez de préciser le nom de l'artiste ou le titre exact.`);
+      if (!result.success || !result.audioBuffer || !result.metadata) {
+        await ctx.reply(`❌ ${result.error || 'Aucun morceau trouvé. Essayez un titre plus précis.'}`);
         return;
       }
 
-      // Carte d'information sur le morceau trouvé
+      const { metadata, audioBuffer } = result;
+      const mime = getMimeType(metadata.fileExt);
+      const safeName = metadata.title.replace(/[^a-zA-Z0-9_\-. ]/g, '_');
+      const fileName = `${safeName}.${metadata.fileExt}`;
+
+      // Carte d'information sur le morceau
       const infoCard =
-        `╭━━━〔 🎵 MUSIQUE TROUVÉE 〕━━━╮\n` +
+        `╭━━━〔 🎵 MUSIQUE 〕━━━╮\n` +
         `┃\n` +
         `┃ 📌 *Titre :* ${metadata.title}\n` +
         `┃ 👤 *Artiste :* ${metadata.artist}\n` +
         `┃ ⏱️ *Durée :* ${metadata.duration}\n` +
         `┃ 🔗 *Lien :* ${metadata.url}\n` +
         `┃\n` +
-        `┃ ⏳ *Téléchargement audio en cours...*\n` +
-        `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`;
+        `╰━━━━━━━━━━━━━━━━━━━━━━━╯`;
 
       await ctx.reply(infoCard);
+      await ctx.provider.sendPresence(ctx.chat.id, 'recording');
 
-      // 2. Téléchargement de l'audio
-      const result = await songService.downloadSongAudio(metadata);
+      // Envoi de l'audio directement dans le chat
+      await ctx.provider.sendMedia(
+        ctx.chat.id,
+        'audio',
+        audioBuffer,
+        undefined,
+        {
+          mimetype: mime,
+          fileName,
+        }
+      );
 
-      if (result.success && result.audioBuffer) {
-        await ctx.provider.sendPresence(ctx.chat.id, 'recording');
-
-        // Envoi de l'audio sur WhatsApp
-        await ctx.provider.sendMedia(
-          ctx.chat.id,
-          'audio',
-          result.audioBuffer,
-          undefined,
-          {
-            mimetype: 'audio/mp4',
-            fileName: `${metadata.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp3`
-          }
-        );
-        logger.info(`[SongCommand] Sent song "${metadata.title}" to ${ctx.chat.id}`);
-      } else {
-        await ctx.reply(`⚠️ ${result.error || 'Impossible de télécharger ce fichier audio pour le moment.'}`);
-      }
+      logger.info(`[SongCommand] Sent "${metadata.title}" [${mime}] (${(audioBuffer.length / (1024 * 1024)).toFixed(2)} MB) to ${ctx.chat.id}`);
     } catch (err: any) {
       logger.error({ error: err.message || err }, '[SongCommand] Execution failed');
       await ctx.reply(`❌ *Erreur lors du traitement de la musique :* ${err.message || 'Erreur inconnue'}`);
