@@ -44,6 +44,9 @@ export class CommandDispatcher {
       },
       replyMedia: async (type, buffer, caption) => {
         await provider.sendMedia(chat.id, type, buffer, caption, { quoted: message.raw });
+      },
+      replyInteractive: async (interactiveMessage, options) => {
+        return await provider.sendInteractiveMessage(chat.id, interactiveMessage, { quoted: message.raw, ...options });
       }
     };
 

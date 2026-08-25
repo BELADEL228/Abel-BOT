@@ -71,4 +71,5 @@ export interface IWhatsAppProvider {
   promoteMember(groupJid: string, userJid: string): Promise<void>;
   demoteMember(groupJid: string, userJid: string): Promise<void>;
   deleteMessage(chatJid: string, messageId: string, fromMe?: boolean, participantJid?: string): Promise<void>;
+  sendInteractiveMessage(chatJid: string, interactiveMessage: any, options?: MessageOptions): Promise<any>;
 }

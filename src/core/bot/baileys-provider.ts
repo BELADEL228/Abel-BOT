@@ -4,6 +4,8 @@ import makeWASocket, {
   useMultiFileAuthState,
   WASocket,
   downloadMediaMessage,
+  generateWAMessageFromContent,
+  prepareWAMessageMedia,
   jidNormalizedUser
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
@@ -400,6 +402,56 @@ export class BaileysProvider implements IWhatsAppProvider {
     } catch (err: any) {
       logger.warn({ error: err.message || err }, `[BaileysProvider:${this.sessionId}] Failed to delete message ${messageId}`);
     }
+  }
+
+  public async sendInteractiveMessage(chatJid: string, interactiveMessage: any, options?: MessageOptions): Promise<any> {
+    if (!this.socket) throw new Error(`[BaileysProvider:${this.sessionId}] Socket not initialized`);
+
+    const userJid = this.socket.user?.id || this.sessionOwnerJid || '22800000000@s.whatsapp.net';
+    const quoted = options?.quoted
+      ? (typeof options.quoted === 'boolean' ? undefined : options.quoted)
+      : undefined;
+
+    const messageContent = {
+      viewOnceMessage: {
+        message: {
+          messageContextInfo: {
+            deviceListMetadata: {},
+            deviceListMetadataVersion: 2
+          },
+          interactiveMessage: interactiveMessage
+        }
+      }
+    };
+
+    const msg = generateWAMessageFromContent(
+      chatJid,
+      messageContent,
+      {
+        userJid,
+        quoted: quoted?.raw || quoted
+      }
+    );
+
+    if (options?.mentions && options.mentions.length > 0) {
+      const target = msg.message?.viewOnceMessage?.message?.interactiveMessage;
+      if (target) {
+        if (!target.contextInfo) {
+          target.contextInfo = {};
+        }
+        target.contextInfo.mentionedJid = options.mentions;
+      }
+    }
+
+    const relayResult = await this.socket.relayMessage(chatJid, msg.message!, {
+      messageId: msg.key.id!
+    });
+
+    if (msg.key?.id) {
+      BaileysProvider.trackSentMessage(msg.key.id);
+    }
+
+    return { key: msg.key, relayResult };
   }
 }
 

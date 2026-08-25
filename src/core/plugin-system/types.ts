@@ -24,6 +24,7 @@ export interface CommandContext {
     buffer: Buffer,
     caption?: string
   ) => Promise<void>;
+  replyInteractive: (interactiveMessage: any, options?: MessageOptions) => Promise<any>;
 }
 
 export interface IPluginCommand {
