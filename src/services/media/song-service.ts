@@ -1,14 +1,16 @@
 /**
- * SongService — Recherche et téléchargement de musiques via youtube-dl-exec.
+ * SongService — Recherche et téléchargement de musiques via yt-dlp natif.
  *
- * Fonctionnalités :
- * - Recherche ultra-précise sur YouTube via youtube-search-api natif
- * - Extraction des métadonnées (titre, artiste, durée, miniature)
- * - Téléchargement audio haute qualité (M4A/WebM → buffer) via URL directe Google
- * - Aucune clé API requise — 100% fiable
+ * Architecture :
+ * 1. Recherche et extraction des métadonnées via ytsearch1 (titre, artiste, durée, miniature).
+ * 2. Téléchargement direct ultra-rapide (~3-5 secondes) via yt-dlp vers un fichier temporaire.
+ * 3. Lecture du buffer, suppression propre du fichier temporaire et envoi sur WhatsApp.
  */
 
 import { youtubeDl } from 'youtube-dl-exec';
+import { readFileSync, unlinkSync, existsSync, readdirSync } from 'fs';
+import os from 'os';
+import path from 'path';
 import logger from '../../core/logger/logger.js';
 
 export interface SongMetadata {
@@ -20,7 +22,6 @@ export interface SongMetadata {
   durationSec: number;
   thumbnail: string;
   fileExt: string;
-  audioUrl: string;
 }
 
 export interface SongDownloadResult {
@@ -30,8 +31,7 @@ export interface SongDownloadResult {
   error?: string;
 }
 
-const MAX_AUDIO_BYTES = 50 * 1024 * 1024; // 50 MB max
-const MAX_DURATION_SEC = 600; // 10 min max
+const MAX_DURATION_SEC = 600; // 10 minutes max
 
 export class SongService {
   private static instance: SongService;
@@ -46,139 +46,118 @@ export class SongService {
   }
 
   /**
-   * 1. Recherche + résolution de la meilleure URL audio pour une chanson
-   *    Supporte : titre, artiste, "artiste - titre", URL YouTube directe
+   * 1. Recherche une chanson et extrait ses métadonnées
    */
   public async searchSong(query: string): Promise<SongMetadata | null> {
     try {
-      logger.info(`[SongService] Resolving audio metadata for: "${query}"`);
+      logger.info(`[SongService] Searching music metadata for: "${query}"`);
 
-      // Détecter si c'est une URL YouTube directe
+      // Détecter si c'est déjà une URL YouTube directe
       const ytUrlMatch = query.match(
         /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/
       );
 
-      let videoUrl: string;
-      if (ytUrlMatch) {
-        videoUrl = `https://www.youtube.com/watch?v=${ytUrlMatch[1]}`;
-        logger.info(`[SongService] Direct YouTube URL detected: ${videoUrl}`);
-      } else {
-        // Recherche YouTube avec ytsearch
-        videoUrl = `ytsearch1:${query} audio`;
-        logger.info(`[SongService] Searching via ytsearch: ${videoUrl}`);
-      }
+      const target = ytUrlMatch
+        ? `https://www.youtube.com/watch?v=${ytUrlMatch[1]}`
+        : `ytsearch1:${query} audio`;
 
-      // Extraire les infos complètes (format audio, titre, artiste, durée)
-      const info = await youtubeDl(videoUrl, {
+      const info = (await youtubeDl(target, {
         dumpSingleJson: true,
         noWarnings: true,
         preferFreeFormats: true,
         format: 'bestaudio/best',
-        addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0'],
-      }) as any;
+      })) as any;
 
-      if (!info || !info.id) {
-        logger.warn('[SongService] No video found for query');
+      // Déballer les résultats si c'est une recherche (playlist ytsearch1)
+      const item = info?.entries && Array.isArray(info.entries) && info.entries.length > 0
+        ? info.entries[0]
+        : info;
+
+      if (!item || !item.id) {
+        logger.warn('[SongService] No matching track found');
         return null;
       }
 
-      // Refuser les vidéos trop longues (podcasts, etc.)
-      if (info.duration > MAX_DURATION_SEC) {
-        logger.warn(`[SongService] Video too long: ${info.duration}s > ${MAX_DURATION_SEC}s`);
+      const durationSec = item.duration || 0;
+      if (durationSec > MAX_DURATION_SEC) {
+        logger.warn(`[SongService] Track too long: ${durationSec}s > ${MAX_DURATION_SEC}s`);
         return null;
       }
 
-      // Sélection du meilleur format audio disponible
-      // Tier 1 : flux audio uniquement (vcodec=none)
-      // Tier 2 : tout format avec un codec audio et une URL
-      // Tier 3 : le format sélectionné par yt-dlp (info.url)
-      const formats: any[] = info.formats || [];
-
-      const audioOnly = formats
-        .filter(f => f.vcodec === 'none' && f.acodec && f.acodec !== 'none' && f.url)
-        .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
-
-      const anyAudio = formats
-        .filter(f => f.acodec && f.acodec !== 'none' && f.url)
-        .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
-
-      const bestAudio = audioOnly[0] || anyAudio[0];
-
-      // Fallback : utiliser l'URL directe du format sélectionné par yt-dlp
-      const audioUrl: string = bestAudio?.url || info.url;
-      const fileExt: string = bestAudio?.ext || info.ext || 'm4a';
-
-      if (!audioUrl) {
-        logger.warn('[SongService] No usable audio URL found');
-        return null;
-      }
-
-      logger.debug(`[SongService] Format selected: vcodec=${bestAudio?.vcodec ?? 'n/a'} acodec=${bestAudio?.acodec ?? 'n/a'} ext=${fileExt} abr=${bestAudio?.abr ?? '?'}`);
-
-
-      const durationSec = info.duration || 0;
       const minutes = Math.floor(durationSec / 60);
       const seconds = String(durationSec % 60).padStart(2, '0');
 
       const metadata: SongMetadata = {
-        videoId: info.id,
-        url: `https://www.youtube.com/watch?v=${info.id}`,
-        title: info.title || info.fulltitle || 'Musique',
-        artist: info.uploader || info.channel || info.artist || 'Artiste',
+        videoId: item.id,
+        url: `https://www.youtube.com/watch?v=${item.id}`,
+        title: item.title || item.fulltitle || 'Musique',
+        artist: item.uploader || item.channel || item.artist || 'Artiste',
         duration: `${minutes}:${seconds}`,
         durationSec,
-        thumbnail: info.thumbnail || `https://i.ytimg.com/vi/${info.id}/hqdefault.jpg`,
-        fileExt,
-        audioUrl,
+        thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`,
+        fileExt: item.ext || 'm4a',
       };
 
-      logger.info(
-        `[SongService] Found: "${metadata.title}" by ${metadata.artist} — ${metadata.duration} [${metadata.fileExt}]`
-      );
-
+      logger.info(`[SongService] Found: "${metadata.title}" by ${metadata.artist} (${metadata.duration})`);
       return metadata;
     } catch (err: any) {
-      logger.error({ error: err.message || err }, '[SongService] Error resolving song metadata');
+      logger.error({ error: err.message || err }, '[SongService] Error resolving track metadata');
       return null;
     }
   }
 
   /**
-   * 2. Télécharge le buffer audio directement depuis l'URL Google extraite
+   * 2. Téléchargement direct du flux audio via yt-dlp
    */
   public async downloadSongAudio(metadata: SongMetadata): Promise<SongDownloadResult> {
-    try {
-      logger.info(
-        `[SongService] Downloading "${metadata.title}" — URL: ${metadata.audioUrl.slice(0, 80)}...`
-      );
+    const tempPrefix = `abel_song_${Date.now()}_${metadata.videoId}`;
+    const tempTemplate = path.join(os.tmpdir(), `${tempPrefix}.%(ext)s`);
 
-      const buffer = await this.fetchBufferSafe(metadata.audioUrl, metadata.fileExt);
-      if (!buffer || buffer.length < 10_000) {
-        // Retry with a fresh URL from youtube-dl-exec (URLs can expire quickly)
-        logger.warn('[SongService] Buffer too small or empty — retrying with fresh URL...');
-        const refreshed = await this.searchSong(metadata.url);
-        if (refreshed) {
-          const retryBuffer = await this.fetchBufferSafe(refreshed.audioUrl, refreshed.fileExt);
-          if (retryBuffer && retryBuffer.length > 10_000) {
-            logger.info(
-              `[SongService] Retry success: ${(retryBuffer.length / (1024 * 1024)).toFixed(2)} MB`
-            );
-            return { success: true, metadata: refreshed, audioBuffer: retryBuffer };
-          }
-        }
+    logger.info(`[SongService] Downloading audio for "${metadata.title}" via yt-dlp...`);
+
+    try {
+      await youtubeDl(metadata.url, {
+        output: tempTemplate,
+        format: 'bestaudio/best',
+        noWarnings: true,
+      });
+
+      // Trouver le fichier temporaire généré
+      const tmpDir = os.tmpdir();
+      const files = readdirSync(tmpDir).filter(f => f.startsWith(tempPrefix));
+
+      if (files.length === 0) {
         return {
           success: false,
           metadata,
-          error: `Échec du téléchargement pour "${metadata.title}". Réessayez dans un instant.`,
+          error: `Échec du téléchargement du fichier audio pour "${metadata.title}".`,
         };
       }
 
-      logger.info(
-        `[SongService] Download complete: ${(buffer.length / (1024 * 1024)).toFixed(2)} MB`
-      );
-      return { success: true, metadata, audioBuffer: buffer };
+      const downloadedFile = path.join(tmpDir, files[0]);
+      const ext = path.extname(downloadedFile).replace('.', '') || metadata.fileExt;
+      metadata.fileExt = ext;
+
+      const buffer = readFileSync(downloadedFile);
+
+      // Nettoyer immédiatement le fichier temporaire
+      try {
+        if (existsSync(downloadedFile)) {
+          unlinkSync(downloadedFile);
+        }
+      } catch {
+        // Ignorer l'erreur de suppression du fichier temp
+      }
+
+      logger.info(`[SongService] Audio downloaded successfully: ${(buffer.length / (1024 * 1024)).toFixed(2)} MB [${ext}]`);
+
+      return {
+        success: true,
+        metadata,
+        audioBuffer: buffer,
+      };
     } catch (err: any) {
-      logger.error({ error: err.message || err }, '[SongService] Download error');
+      logger.error({ error: err.message || err }, '[SongService] Error during direct audio download');
       return {
         success: false,
         metadata,
@@ -188,7 +167,7 @@ export class SongService {
   }
 
   /**
-   * 3. Méthode tout-en-un : recherche + téléchargement
+   * 3. Méthode tout-en-un : Recherche + Téléchargement
    */
   public async findAndDownload(query: string): Promise<SongDownloadResult> {
     const metadata = await this.searchSong(query);
@@ -199,48 +178,6 @@ export class SongService {
       };
     }
     return this.downloadSongAudio(metadata);
-  }
-
-  /**
-   * Helper sécurisé pour télécharger le buffer depuis l'URL directe
-   */
-  private async fetchBufferSafe(url: string, _ext: string): Promise<Buffer | null> {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60_000); // 60s timeout
-
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Referer': 'https://www.youtube.com/',
-          'Accept': '*/*',
-        },
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (!res.ok) {
-        logger.warn(`[SongService] fetchBufferSafe: HTTP ${res.status}`);
-        return null;
-      }
-
-      const contentLength = Number(res.headers.get('content-length') || 0);
-      if (contentLength > MAX_AUDIO_BYTES) {
-        logger.warn(`[SongService] File too large: ${contentLength} bytes`);
-        return null;
-      }
-
-      const arrayBuffer = await res.arrayBuffer();
-      if (arrayBuffer.byteLength > MAX_AUDIO_BYTES) {
-        logger.warn(`[SongService] Buffer too large: ${arrayBuffer.byteLength} bytes`);
-        return null;
-      }
-
-      return Buffer.from(arrayBuffer);
-    } catch (err: any) {
-      logger.debug(`[SongService] fetchBufferSafe error: ${err.message}`);
-      return null;
-    }
   }
 }
 
