@@ -2,7 +2,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json tsconfig.json prisma ./
+COPY package*.json tsconfig.json ./
+COPY prisma ./prisma/
 RUN npm ci
 
 COPY src ./src
@@ -16,11 +17,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
+COPY prisma ./prisma/
 RUN npm ci --only=production
+RUN npx prisma generate
 
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
 EXPOSE 3000
 
