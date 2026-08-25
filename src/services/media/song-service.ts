@@ -8,9 +8,7 @@
  * - Aucune clé API requise — 100% fiable
  */
 
-import * as ytdlModule from 'youtube-dl-exec';
-// youtube-dl-exec exports itself as a callable function via CJS interop
-const youtubeDl = ytdlModule as unknown as (url: string, options: Record<string, unknown>) => Promise<any>;
+import { youtubeDl } from 'youtube-dl-exec';
 import logger from '../../core/logger/logger.js';
 
 export interface SongMetadata {
@@ -74,9 +72,8 @@ export class SongService {
       const info = await youtubeDl(videoUrl, {
         dumpSingleJson: true,
         noWarnings: true,
-        noCallHome: true,
-        noCheckCertificates: true,
         preferFreeFormats: true,
+        format: 'bestaudio/best',
         addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0'],
       }) as any;
 
@@ -85,23 +82,39 @@ export class SongService {
         return null;
       }
 
-      // Refuser les vidéos trop longues (clip, podcasts)
+      // Refuser les vidéos trop longues (podcasts, etc.)
       if (info.duration > MAX_DURATION_SEC) {
         logger.warn(`[SongService] Video too long: ${info.duration}s > ${MAX_DURATION_SEC}s`);
         return null;
       }
 
-      // Trouver le meilleur format audio seulement
+      // Sélection du meilleur format audio disponible
+      // Tier 1 : flux audio uniquement (vcodec=none)
+      // Tier 2 : tout format avec un codec audio et une URL
+      // Tier 3 : le format sélectionné par yt-dlp (info.url)
       const formats: any[] = info.formats || [];
-      const audioFormats = formats
-        .filter(f => f.vcodec === 'none' && f.acodec !== 'none' && f.url)
+
+      const audioOnly = formats
+        .filter(f => f.vcodec === 'none' && f.acodec && f.acodec !== 'none' && f.url)
         .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
 
-      const bestAudio = audioFormats[0];
-      if (!bestAudio) {
-        logger.warn('[SongService] No audio-only format found');
+      const anyAudio = formats
+        .filter(f => f.acodec && f.acodec !== 'none' && f.url)
+        .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
+
+      const bestAudio = audioOnly[0] || anyAudio[0];
+
+      // Fallback : utiliser l'URL directe du format sélectionné par yt-dlp
+      const audioUrl: string = bestAudio?.url || info.url;
+      const fileExt: string = bestAudio?.ext || info.ext || 'm4a';
+
+      if (!audioUrl) {
+        logger.warn('[SongService] No usable audio URL found');
         return null;
       }
+
+      logger.debug(`[SongService] Format selected: vcodec=${bestAudio?.vcodec ?? 'n/a'} acodec=${bestAudio?.acodec ?? 'n/a'} ext=${fileExt} abr=${bestAudio?.abr ?? '?'}`);
+
 
       const durationSec = info.duration || 0;
       const minutes = Math.floor(durationSec / 60);
@@ -115,8 +128,8 @@ export class SongService {
         duration: `${minutes}:${seconds}`,
         durationSec,
         thumbnail: info.thumbnail || `https://i.ytimg.com/vi/${info.id}/hqdefault.jpg`,
-        fileExt: bestAudio.ext || 'm4a',
-        audioUrl: bestAudio.url,
+        fileExt,
+        audioUrl,
       };
 
       logger.info(
