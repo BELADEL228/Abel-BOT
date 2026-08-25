@@ -16,6 +16,8 @@ import { IWhatsAppProvider, MessageOptions, SessionStatus } from './types.js';
 import { BOT_CONSTANTS } from '../../config/constants.js';
 import messageHandler from '../message-handler/message-handler.js';
 import autoReplyEngine from '../../services/automation/auto-reply-engine.js';
+import chatHistoryService from '../../services/chat/chat-history-service.js';
+import SignalSessionHealer from './signal-session-healer.js';
 import logger from '../logger/logger.js';
 import { healthMonitor } from '../monitoring/health-check.js';
 
@@ -149,7 +151,16 @@ export class BaileysProvider implements IWhatsAppProvider {
       maxMsgRetryCount: 5,
       syncFullHistory: false,
       markOnlineOnConnect: true,
-      getMessage: async (_key) => undefined
+      getMessage: async (key) => {
+        if (!key.remoteJid || !key.id) return undefined;
+        const stored = chatHistoryService.getMessageById(key.remoteJid, key.id);
+        if (stored?.text) {
+          return {
+            conversation: stored.text
+          };
+        }
+        return undefined;
+      }
     });
 
     this.socket.ev.on('creds.update', saveCreds);
@@ -220,7 +231,8 @@ export class BaileysProvider implements IWhatsAppProvider {
       for (const msg of event.messages) {
         try {
           await messageHandler.handleIncomingMessage(msg, this);
-        } catch (err) {
+        } catch (err: any) {
+          SignalSessionHealer.handlePotentialMacError(this.authDir, err);
           logger.error({ error: err }, `[BaileysProvider:${this.sessionId}] Error handling incoming message`);
         }
       }
