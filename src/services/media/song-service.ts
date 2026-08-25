@@ -118,7 +118,7 @@ export class SongService {
     try {
       await youtubeDl(metadata.url, {
         output: tempTemplate,
-        format: 'bestaudio/best',
+        format: 'bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best',
         noWarnings: true,
       });
 

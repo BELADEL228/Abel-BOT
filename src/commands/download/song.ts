@@ -71,19 +71,33 @@ const SongCommand: IPluginCommand = {
       await ctx.reply(infoCard);
       await ctx.provider.sendPresence(ctx.chat.id, 'recording');
 
-      // Envoi de l'audio directement dans le chat
-      await ctx.provider.sendMedia(
-        ctx.chat.id,
-        'audio',
-        audioBuffer,
-        undefined,
-        {
-          mimetype: mime,
-          fileName,
-        }
-      );
-
-      logger.info(`[SongCommand] Sent "${metadata.title}" [${mime}] (${(audioBuffer.length / (1024 * 1024)).toFixed(2)} MB) to ${ctx.chat.id}`);
+      // Envoi de l'audio directement dans le chat (avec fallback document si besoin)
+      try {
+        await ctx.provider.sendMedia(
+          ctx.chat.id,
+          'audio',
+          audioBuffer,
+          undefined,
+          {
+            mimetype: mime,
+            fileName,
+          }
+        );
+        logger.info(`[SongCommand] Sent "${metadata.title}" as audio [${mime}] (${(audioBuffer.length / (1024 * 1024)).toFixed(2)} MB) to ${ctx.chat.id}`);
+      } catch (mediaErr: any) {
+        logger.warn({ error: mediaErr.message }, '[SongCommand] Failed to send as audio, falling back to document...');
+        await ctx.provider.sendMedia(
+          ctx.chat.id,
+          'document',
+          audioBuffer,
+          `🎵 *${metadata.title}* - ${metadata.artist}`,
+          {
+            mimetype: mime,
+            fileName,
+          }
+        );
+        logger.info(`[SongCommand] Sent "${metadata.title}" as document [${mime}] to ${ctx.chat.id}`);
+      }
     } catch (err: any) {
       logger.error({ error: err.message || err }, '[SongCommand] Execution failed');
       await ctx.reply(`❌ *Erreur lors du traitement de la musique :* ${err.message || 'Erreur inconnue'}`);

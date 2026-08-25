@@ -312,6 +312,8 @@ export class BaileysProvider implements IWhatsAppProvider {
     else if (type === 'audio') {
       content.audio = mediaBuffer;
       content.mimetype = options?.mimetype || 'audio/mp4';
+      if (options?.fileName) content.fileName = options.fileName;
+      content.ptt = false;
     }
     else if (type === 'document') {
       content.document = mediaBuffer;
