@@ -1,12 +1,15 @@
 /**
- * MediaDownloaderService — Service de téléchargement média sécurisé (TikTok, YouTube, Instagram, etc.)
+ * MediaDownloaderService — Service de téléchargement média universel et sécurisé
+ * (Facebook, TikTok, YouTube, Instagram, Twitter / X, etc.)
  *
- * Sécurité renforcée :
- * - Protection SSRF (blocage localhost, IP privées, métadonnées cloud)
- * - Timeout réseau strict (30 secondes max par requête)
- * - Limite de taille mémoire stricte (50 Mo max par média téléchargé pour prévenir les OOM)
+ * Moteur principal : yt-dlp natif avec fallbacks APIs sécurisées.
+ * Protection : SSRF, limite de mémoire 50MB, timeouts réseau.
  */
 
+import { youtubeDl } from 'youtube-dl-exec';
+import { readFileSync, unlinkSync, existsSync, readdirSync } from 'fs';
+import os from 'os';
+import path from 'path';
 import logger from '../../core/logger/logger.js';
 
 export interface DownloadResult {
@@ -16,6 +19,7 @@ export interface DownloadResult {
   url?: string;
   title?: string;
   author?: string;
+  fileName?: string;
   error?: string;
 }
 
@@ -70,9 +74,9 @@ async function safeFetchBuffer(url: string, customHeaders: Record<string, string
     const res = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        ...customHeaders
+        ...customHeaders,
       },
-      signal: controller.signal
+      signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
@@ -99,6 +103,51 @@ async function safeFetchBuffer(url: string, customHeaders: Record<string, string
   }
 }
 
+/**
+ * Télécharge directement via yt-dlp vers un fichier temporaire avec nettoyage automatique.
+ */
+async function downloadViaYtDlp(
+  targetUrl: string,
+  options: { audioOnly?: boolean; customFormat?: string } = {}
+): Promise<{ buffer: Buffer; title?: string; ext: string } | null> {
+  const tempPrefix = `abel_dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const tempTemplate = path.join(os.tmpdir(), `${tempPrefix}.%(ext)s`);
+
+  const format = options.customFormat || (options.audioOnly
+    ? 'bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best'
+    : 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best');
+
+  try {
+    logger.info(`[MediaDownloader] yt-dlp downloading: ${targetUrl}`);
+    await youtubeDl(targetUrl, {
+      output: tempTemplate,
+      format,
+      noWarnings: true,
+    });
+
+    const tmpDir = os.tmpdir();
+    const files = readdirSync(tmpDir).filter(f => f.startsWith(tempPrefix));
+
+    if (files.length === 0) return null;
+
+    const downloadedFile = path.join(tmpDir, files[0]);
+    const ext = path.extname(downloadedFile).replace('.', '') || (options.audioOnly ? 'm4a' : 'mp4');
+    const buffer = readFileSync(downloadedFile);
+
+    // Supprimer le fichier temporaire
+    try {
+      if (existsSync(downloadedFile)) unlinkSync(downloadedFile);
+    } catch {
+      // Ignorer
+    }
+
+    return { buffer, ext };
+  } catch (err: any) {
+    logger.debug(`[MediaDownloader] yt-dlp direct download failed: ${err.message}`);
+    return null;
+  }
+}
+
 export class MediaDownloaderService {
   private static instance: MediaDownloaderService;
 
@@ -112,21 +161,71 @@ export class MediaDownloaderService {
   }
 
   /**
-   * Downloads TikTok video (No Watermark) or audio
+   * 1. Téléchargement Facebook (Vidéo / Reel / Watch / Post / Audio)
+   */
+  public async downloadFacebook(fbUrl: string, audioOnly = false): Promise<DownloadResult> {
+    if (!isSafePublicUrl(fbUrl)) {
+      return { success: false, type: audioOnly ? 'audio' : 'video', error: 'Lien Facebook invalide.' };
+    }
+
+    logger.info(`[MediaDownloader] Downloading Facebook: ${fbUrl} (audioOnly: ${audioOnly})`);
+
+    // Tier 1: yt-dlp direct
+    const ytdlRes = await downloadViaYtDlp(fbUrl, { audioOnly });
+    if (ytdlRes && ytdlRes.buffer.length > 10_000) {
+      return {
+        success: true,
+        type: audioOnly ? 'audio' : 'video',
+        buffer: ytdlRes.buffer,
+        title: 'Vidéo Facebook',
+        fileName: `facebook_${Date.now()}.${ytdlRes.ext}`,
+      };
+    }
+
+    // Tier 2: Fallback SnapSave / FSave API
+    try {
+      const snapApi = `https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`;
+      const res = await fetch(snapApi, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(() => null);
+      if (res && res.ok) {
+        const data: any = await res.json().catch(() => null);
+        const videoUrl = data?.data?.video_hd || data?.data?.video_sd || data?.result?.hd || data?.result?.sd;
+        if (videoUrl) {
+          const buffer = await safeFetchBuffer(videoUrl);
+          if (buffer && buffer.length > 10_000) {
+            return {
+              success: true,
+              type: audioOnly ? 'audio' : 'video',
+              buffer,
+              title: data?.data?.title || 'Vidéo Facebook',
+            };
+          }
+        }
+      }
+    } catch (_) {}
+
+    return {
+      success: false,
+      type: audioOnly ? 'audio' : 'video',
+      error: 'Impossible de télécharger la vidéo Facebook. Assurez-vous que la vidéo est publique et accessible.',
+    };
+  }
+
+  /**
+   * 2. Téléchargement TikTok (sans filigrane) ou audio
    */
   public async downloadTikTok(tiktokUrl: string, audioOnly = false): Promise<DownloadResult> {
     if (!isSafePublicUrl(tiktokUrl)) {
-      return { success: false, type: 'video', error: 'Lien invalide ou non autorisé.' };
+      return { success: false, type: 'video', error: 'Lien TikTok invalide.' };
     }
 
-    try {
-      logger.info(`[MediaDownloader] Downloading TikTok from: ${tiktokUrl}`);
+    logger.info(`[MediaDownloader] Downloading TikTok from: ${tiktokUrl}`);
 
-      // Primary API: TikWM
+    // Tier 1: API TikWM (rapide sans filigrane)
+    try {
       const apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(tiktokUrl)}`;
       const response = await fetch(apiUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       }).catch(() => null);
 
       if (response && response.ok) {
@@ -145,108 +244,85 @@ export class MediaDownloaderService {
                 buffer,
                 url: targetMediaUrl,
                 title,
-                author
+                author,
               };
             }
           }
         }
       }
+    } catch (_) {}
 
-      // Fallback API: TiklyDown
-      try {
-        const fbUrl = `https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(tiktokUrl)}`;
-        const fbRes = await fetch(fbUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-        if (fbRes.ok) {
-          const fbData: any = await fbRes.json();
-          const targetUrl = audioOnly ? fbData.music?.play_url : fbData.video?.noWatermark;
-          if (targetUrl) {
-            const buffer = await safeFetchBuffer(targetUrl);
-            if (buffer) {
-              return {
-                success: true,
-                type: audioOnly ? 'audio' : 'video',
-                buffer,
-                title: fbData.title || 'Vidéo TikTok',
-                author: fbData.author?.name || 'TikTok'
-              };
-            }
-          }
-        }
-      } catch (_) {}
-
+    // Tier 2: yt-dlp fallback
+    const ytdlRes = await downloadViaYtDlp(tiktokUrl, { audioOnly });
+    if (ytdlRes && ytdlRes.buffer.length > 10_000) {
       return {
-        success: false,
-        type: 'video',
-        error: 'Impossible de récupérer la vidéo TikTok. Vérifiez que le lien est public.'
-      };
-    } catch (err: any) {
-      logger.error({ error: err.message || err }, '[MediaDownloader] TikTok download failed');
-      return {
-        success: false,
-        type: 'video',
-        error: err.message || 'Erreur lors du téléchargement TikTok'
+        success: true,
+        type: audioOnly ? 'audio' : 'video',
+        buffer: ytdlRes.buffer,
+        title: 'Vidéo TikTok',
+        fileName: `tiktok_${Date.now()}.${ytdlRes.ext}`,
       };
     }
+
+    return {
+      success: false,
+      type: 'video',
+      error: 'Impossible de récupérer la vidéo TikTok. Vérifiez que le lien est public.',
+    };
   }
 
   /**
-   * Downloads YouTube video / audio
+   * 3. Téléchargement YouTube (Vidéo MP4 / Audio MP3)
    */
   public async downloadYouTube(ytUrl: string, audioOnly = false): Promise<DownloadResult> {
     if (!isSafePublicUrl(ytUrl)) {
       return { success: false, type: audioOnly ? 'audio' : 'video', error: 'Lien YouTube invalide.' };
     }
 
-    try {
-      logger.info(`[MediaDownloader] Downloading YouTube from: ${ytUrl}`);
+    logger.info(`[MediaDownloader] Downloading YouTube: ${ytUrl} (audioOnly: ${audioOnly})`);
 
-      const endpoint = audioOnly
-        ? `https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(ytUrl)}`
-        : `https://api.siputzx.my.id/api/d/ytmp4?url=${encodeURIComponent(ytUrl)}`;
-
-      const res = await fetch(endpoint, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(() => null);
-      if (res && res.ok) {
-        const data: any = await res.json().catch(() => null);
-        const dlUrl = data?.data?.dl || data?.data?.url || data?.result?.download;
-        const title = data?.data?.title || data?.result?.title || 'YouTube Media';
-
-        if (dlUrl) {
-          const buffer = await safeFetchBuffer(dlUrl);
-          if (buffer) {
-            return {
-              success: true,
-              type: audioOnly ? 'audio' : 'video',
-              buffer,
-              title
-            };
-          }
-        }
-      }
-
+    const ytdlRes = await downloadViaYtDlp(ytUrl, { audioOnly });
+    if (ytdlRes && ytdlRes.buffer.length > 10_000) {
       return {
-        success: false,
+        success: true,
         type: audioOnly ? 'audio' : 'video',
-        error: 'Service YouTube temporairement indisponible. Veuillez réessayer dans quelques instants.'
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        type: audioOnly ? 'audio' : 'video',
-        error: err.message || 'Erreur lors du téléchargement YouTube'
+        buffer: ytdlRes.buffer,
+        title: 'YouTube Media',
+        fileName: `youtube_${Date.now()}.${ytdlRes.ext}`,
       };
     }
+
+    return {
+      success: false,
+      type: audioOnly ? 'audio' : 'video',
+      error: 'Impossible de télécharger le média YouTube. Vérifiez le lien.',
+    };
   }
 
   /**
-   * Downloads Instagram Post / Reel
+   * 4. Téléchargement Instagram (Reel, Vidéo, Post)
    */
   public async downloadInstagram(igUrl: string): Promise<DownloadResult> {
     if (!isSafePublicUrl(igUrl)) {
       return { success: false, type: 'video', error: 'Lien Instagram invalide.' };
     }
 
+    logger.info(`[MediaDownloader] Downloading Instagram: ${igUrl}`);
+
+    // Tier 1: yt-dlp
+    const ytdlRes = await downloadViaYtDlp(igUrl);
+    if (ytdlRes && ytdlRes.buffer.length > 10_000) {
+      return {
+        success: true,
+        type: 'video',
+        buffer: ytdlRes.buffer,
+        title: 'Instagram Media',
+        fileName: `instagram_${Date.now()}.${ytdlRes.ext}`,
+      };
+    }
+
+    // Tier 2: API fallback
     try {
-      logger.info(`[MediaDownloader] Downloading Instagram from: ${igUrl}`);
       const endpoint = `https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`;
       const res = await fetch(endpoint, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(() => null);
 
@@ -263,24 +339,46 @@ export class MediaDownloaderService {
               success: true,
               type: isVideo ? 'video' : 'image',
               buffer,
-              title: 'Instagram Post'
+              title: 'Instagram Post',
             };
           }
         }
       }
+    } catch (_) {}
 
+    return {
+      success: false,
+      type: 'video',
+      error: 'Impossible de télécharger ce contenu Instagram. Assurez-vous que le compte est public.',
+    };
+  }
+
+  /**
+   * 5. Téléchargement Twitter / X
+   */
+  public async downloadTwitter(twUrl: string): Promise<DownloadResult> {
+    if (!isSafePublicUrl(twUrl)) {
+      return { success: false, type: 'video', error: 'Lien Twitter / X invalide.' };
+    }
+
+    logger.info(`[MediaDownloader] Downloading Twitter / X: ${twUrl}`);
+
+    const ytdlRes = await downloadViaYtDlp(twUrl);
+    if (ytdlRes && ytdlRes.buffer.length > 10_000) {
       return {
-        success: false,
+        success: true,
         type: 'video',
-        error: 'Impossible de télécharger ce contenu Instagram. Assurez-vous que le compte est public.'
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        type: 'video',
-        error: err.message || 'Erreur lors du téléchargement Instagram'
+        buffer: ytdlRes.buffer,
+        title: 'Twitter / X Vidéo',
+        fileName: `twitter_${Date.now()}.${ytdlRes.ext}`,
       };
     }
+
+    return {
+      success: false,
+      type: 'video',
+      error: 'Impossible de télécharger la vidéo Twitter / X. Vérifiez le lien.',
+    };
   }
 }
 
