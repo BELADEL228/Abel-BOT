@@ -41,6 +41,12 @@ export const defaultTheme: ThemeConfig = {
       description: 'Musiques MP3, vidéos HD, TikTok, YouTube & Facebook',
       badge: 'Media'
     },
+    Games: {
+      icon: '🎮',
+      title: 'JEUX & MULTIJOUEUR',
+      description: 'Morpion, Puissance 4, Pendu, Quiz & Classements',
+      badge: 'Games'
+    },
     Group: {
       icon: '👥',
       title: 'GESTION DE GROUPE',

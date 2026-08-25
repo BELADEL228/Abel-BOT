@@ -9,6 +9,7 @@ import logger from '../logger/logger.js';
 import { healthMonitor } from '../monitoring/health-check.js';
 import monitorService from '../../services/automation/monitor-service.js';
 import pollService from '../../services/automation/poll-service.js';
+import gameManager, { gameStatsService, WhatsAppGameRenderer } from '../../games/index.js';
 import { BaileysProvider } from '../bot/baileys-provider.js';
 
 /**
@@ -252,13 +253,65 @@ export class MessageHandler {
           const result = pollService.vote(chatJid, senderJid, voteChoice);
           if (result.success) {
             const option = activePoll.options.find(o => o.index === voteChoice);
-            logger.debug(`[MessageHandler] Vote recorded: ${sender.name} → option ${voteChoice} ("${option?.text}")`)
+            logger.debug(`[MessageHandler] Vote recorded: ${sender.name} → option ${voteChoice} ("${option?.text}")`);
           }
         }
       }
     }
 
-    // 5. Dispatch message to command engine
+    // 5. Active Game Interaction Hook (Natural in-chat moves & invitations)
+    if (!isFromMe && text && !isCommand) {
+      const activeSession = gameManager.getActiveGame(chatJid);
+      if (activeSession) {
+        const gamePlayer = {
+          id: senderJid,
+          name: sender.name || phone,
+          joinedAt: Date.now()
+        };
+
+        // 5a. Invitation acceptance/refusal
+        if (activeSession.status === 'WAITING_FOR_PLAYERS') {
+          const clean = text.trim().toLowerCase();
+          if (['1', 'oui', 'yes', 'accepter', 'join', 'jouer'].includes(clean)) {
+            const joinResult = gameManager.joinGame(chatJid, gamePlayer);
+            if (joinResult.success && joinResult.started && joinResult.view) {
+              const textOut = WhatsAppGameRenderer.toFormattedText(joinResult.view);
+              await provider.sendMessage(chatJid, textOut, {
+                mentions: joinResult.view.mentions,
+                quoted: rawMessage
+              });
+              return;
+            }
+          } else if (['2', 'non', 'no', 'refuser', 'decline'].includes(clean)) {
+            if (activeSession.isInvited(senderJid)) {
+              gameManager.declineInvite(chatJid, gamePlayer);
+              await provider.sendMessage(chatJid, `❌ *${gamePlayer.name}* a décliné l'invitation de jeu.`, { quoted: rawMessage });
+              return;
+            }
+          }
+        }
+
+        // 5b. In-Game Moves (Turn execution)
+        if (activeSession.status === 'IN_PROGRESS' && activeSession.hasPlayer(senderJid)) {
+          const actionRes = gameManager.handleAction(chatJid, gamePlayer, text.trim());
+          if (actionRes.success && actionRes.view) {
+            const textOut = WhatsAppGameRenderer.toFormattedText(actionRes.view);
+            await provider.sendMessage(chatJid, textOut, {
+              mentions: actionRes.view.mentions,
+              quoted: rawMessage
+            });
+
+            // Enregistrer les statistiques si la partie est terminée
+            if (actionRes.isGameOver && actionRes.result) {
+              gameStatsService.recordMatchResult(activeSession.gameId, actionRes.result, activeSession.players);
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    // 6. Dispatch message to command engine
     await commandDispatcher.dispatch(unifiedMessage, sender, chat, provider);
   }
 }

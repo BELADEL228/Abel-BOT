@@ -8,6 +8,7 @@ export const BOT_CONSTANTS = {
     'AI',
     'Automation',
     'Download',
+    'Games',
     'General',
     'Group',
     'Owner',
