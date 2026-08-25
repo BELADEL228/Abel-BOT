@@ -5,7 +5,7 @@ const DownloadCommand: IPluginCommand = {
   name: 'download',
   aliases: [
     'tiktok', 'tt', 'ttdl', 'tiktokaudio',
-    'youtube', 'yt', 'ytmp4', 'ytmp3', 'video',
+    'youtube', 'yt', 'ytmp4', 'ytmp3',
     'instagram', 'ig', 'igdl', 'igaudio',
     'facebook', 'fb', 'fbdl', 'fbaudio', 'fbvideo', 'fbmp4',
     'twitter', 'twdl', 'x', 'tw',
