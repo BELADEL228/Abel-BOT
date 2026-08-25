@@ -1,0 +1,252 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  OWNER
+  SUDO
+  ADMIN
+  USER
+}
+
+model User {
+  id               String        @id // JID (ex: 228xxxxxx@s.whatsapp.net)
+  phone            String        @unique
+  name             String?
+  role             Role          @default(USER)
+  isBlocked        Boolean       @default(false)
+  isWhitelisted    Boolean       @default(false)
+  warnings         Int           @default(0)
+  customAutoReply  String?
+  language         String        @default("fr")
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  contacts         Contact[]
+  messages         Message[]
+  commandUsages    CommandUsage[]
+  reminders        Reminder[]
+  memories         Memory[]
+
+  @@map("users")
+}
+
+model Contact {
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nickname         String?
+  tags             String[]
+  relationship     String?
+  notes            String?
+  priority         Int           @default(0)
+  customAutoReply  String?
+  lastInteraction  DateTime      @default(now())
+
+  @@map("contacts")
+}
+
+model Group {
+  id               String        @id // Group JID (@g.us)
+  name             String
+  description      String?
+  isAntilink       Boolean       @default(false)
+  isAntispam       Boolean       @default(false)
+  isAntibot        Boolean       @default(false)
+  isAntiflood      Boolean       @default(false)
+  isAntimedias     Boolean       @default(false)
+  isBadwordFilter  Boolean       @default(false)
+  isAutoReplyIgnored Boolean     @default(false)
+  badwords         String[]
+  welcomeMessage   String?
+  goodbyeMessage   String?
+  rules            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  members          GroupMember[]
+  securityEvents   SecurityEvent[]
+  statistics       GroupStatistic?
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id               String        @id @default(uuid())
+  groupId          String
+  group            Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userJid          String
+  isAdmin          Boolean       @default(false)
+  warnings         Int           @default(0)
+  joinedAt         DateTime      @default(now())
+
+  @@unique([groupId, userJid])
+  @@map("group_members")
+}
+
+model Message {
+  id               String        @id
+  chatJid          String
+  senderJid        String
+  user             User          @relation(fields: [senderJid], references: [id])
+  content          String?
+  mediaType        String?
+  isGroup          Boolean       @default(false)
+  timestamp        DateTime      @default(now())
+
+  @@map("messages")
+}
+
+model CommandUsage {
+  id               String        @id @default(uuid())
+  commandName      String
+  userJid          String
+  user             User          @relation(fields: [userJid], references: [id])
+  chatJid          String
+  executionTimeMs  Int
+  success          Boolean
+  timestamp        DateTime      @default(now())
+
+  @@map("command_usages")
+}
+
+model Memory {
+  id               String        @id @default(uuid())
+  userJid          String
+  user             User          @relation(fields: [userJid], references: [id])
+  key              String
+  value            String
+  createdAt        DateTime      @default(now())
+
+  @@unique([userJid, key])
+  @@map("memories")
+}
+
+model Reminder {
+  id               String        @id @default(uuid())
+  userJid          String
+  user             User          @relation(fields: [userJid], references: [id])
+  chatJid          String
+  message          String
+  triggerAt        DateTime
+  isCompleted      Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+
+  @@map("reminders")
+}
+
+model SecurityEvent {
+  id               String        @id @default(uuid())
+  groupId          String?
+  group            Group?        @relation(fields: [groupId], references: [id])
+  userJid          String
+  type             String        // PHISHING_LINK, SPAM_FLOOD, BOT_BEHAVIOR
+  actionTaken      String        // WARN, DELETE, MUTE, KICK
+  details          String?
+  timestamp        DateTime      @default(now())
+
+  @@map("security_events")
+}
+
+model GroupStatistic {
+  id               String        @id @default(uuid())
+  groupId          String        @unique
+  group            Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  totalMessages    Int           @default(0)
+  totalSpam        Int           @default(0)
+  totalLinks       Int           @default(0)
+  updatedAt        DateTime      @updatedAt
+
+  @@map("group_statistics")
+}
+
+// ─── AUTO-REPLY INTELLIGENT ────────────────────────────────────────────────
+
+// Global configuration for the AutoReply system (single row, id = "default")
+model AutoReplyConfig {
+  id                    String    @id @default("default")
+  state                 String    @default("OFF")  // OFF | ON | BUSY | AWAY | VACATION | SCHEDULED | PAUSED
+  cooldownHours         Float     @default(6)
+  maxPerHour            Int       @default(20)
+  minDelaySeconds       Int       @default(5)
+  maxDelaySeconds       Int       @default(20)
+  humanActiveWindowMin  Int       @default(15)
+  vacationUntil         DateTime?
+  scheduleDays          String[]  @default(["monday","tuesday","wednesday","thursday","friday","saturday","sunday"])
+  scheduleStart         String?
+  scheduleEnd           String?
+  urgentKeywords        String[]  @default(["urgent","urgence","serveur","paiement","deadline","bloquant","sos","problème critique"])
+  groupsEnabled         Boolean   @default(false)
+  defaultTemplate       String    @default("Salut {firstName} 👋 Je suis actuellement occupé. J'ai bien reçu ton message et je reviens vers toi au plus vite.")
+  busyTemplate          String    @default("Salut {firstName} ! Je suis actuellement très occupé. J'ai bien noté ton message et je te réponds dès que j'ai un moment 🙏")
+  awayTemplate          String    @default("Hey {firstName} ! Je suis absent pour l'instant. J'ai bien reçu ton message et je reviendrai vers toi dès que possible.")
+  vacationTemplate      String    @default("Bonjour {firstName} 👋 Je suis en congés jusqu'au {untilDate}. Je prendrai connaissance de ton message à mon retour !")
+  nightTemplate         String    @default("Bonsoir {firstName}. Il est un peu tard, je prendrai connaissance de ton message demain matin.")
+  updatedAt             DateTime  @updatedAt
+
+  @@map("autoreply_config")
+}
+
+// Per-contact tracking: cooldowns, categories, reply history
+model AutoReplyContact {
+  id                 String    @id @default(uuid())
+  userJid            String    @unique
+  name               String?
+  category           String    @default("UNKNOWN")  // FRIEND | WORK | FAMILY | PERSONAL | UNKNOWN
+  customTemplate     String?
+  lastMessageAt      DateTime  @default(now())
+  lastReplyAt        DateTime?
+  cooldownUntil      DateTime?
+  replyCount         Int       @default(0)
+  isAllowed          Boolean   @default(false)  // explicit whitelist
+  isBlocked          Boolean   @default(false)  // explicit blacklist
+  humanActiveUntil   DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  logs               AutoReplyLog[]
+
+  @@map("autoreply_contacts")
+}
+
+// Audit log: every decision the engine makes is recorded
+model AutoReplyLog {
+  id             String           @id @default(uuid())
+  contactJid     String
+  contact        AutoReplyContact @relation(fields: [contactJid], references: [userJid], onDelete: Cascade)
+  messageText    String
+  decision       String           // REPLY | IGNORE | NOTIFY_OWNER | CANCELED
+  reason         String           // FIRST_MESSAGE | COOLDOWN_ACTIVE | OWNER_ACTIVE | MESSAGE_READ | URGENT_KEYWORD | SHORT_MESSAGE | BOT_DETECTED | BLACKLISTED | GLOBAL_RATE_LIMIT | TRIVIAL
+  templateUsed   String?
+  delayAppliedMs Int?
+  sentAt         DateTime         @default(now())
+
+  @@index([contactJid, sentAt])
+  @@map("autoreply_logs")
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  
+  // Identifiant du chat (JID WhatsApp)
+  chatJid   String
+  
+  // Qui a envoyé: "owner" (le bot) ou "contact" (l'utilisateur)
+  sender    String
+  
+  // Contenu du message
+  text      String
+  
+  // Quand le message a été envoyé
+  timestamp DateTime @default(now())
+  
+  // Index pour les requêtes rapides
+  @@index([chatJid])
+  @@index([timestamp])
+  @@index([chatJid, timestamp])  // Index composé pour les requêtes combinées
+}

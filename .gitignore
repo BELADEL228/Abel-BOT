@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# WhatsApp Baileys Authentication & Session files (SECURITY CRITICAL)
+auth_info_baileys/
+baileys_auth_info/
+*auth_info*/
+*baileys_auth*/
+sessions/
+*.creds.json
+creds.json
+session.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database & SQLite
+*.db
+*.sqlite
+prisma/*.db
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.gemini/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
