@@ -50,6 +50,22 @@ export class BaileysProvider implements IWhatsAppProvider {
     this.loadSessionMetadata();
   }
 
+  public static readonly botSentMessageIds: Set<string> = new Set();
+
+  public static isBotSentMessage(id?: string | null): boolean {
+    if (!id) return false;
+    return BaileysProvider.botSentMessageIds.has(id);
+  }
+
+  public static trackSentMessage(id?: string | null): void {
+    if (!id) return;
+    BaileysProvider.botSentMessageIds.add(id);
+    if (BaileysProvider.botSentMessageIds.size > 5000) {
+      const oldest = BaileysProvider.botSentMessageIds.keys().next().value;
+      if (oldest) BaileysProvider.botSentMessageIds.delete(oldest);
+    }
+  }
+
   private loadSessionMetadata(): void {
     try {
       const metaPath = path.join(this.authDir, 'session.json');
@@ -207,28 +223,6 @@ export class BaileysProvider implements IWhatsAppProvider {
         }
       }
     });
-
-    this.socket.ev.on('messages.update', async (updates) => {
-      for (const update of updates) {
-        if (update.update.status === 4 || (update.update as any).status === 'READ') {
-          const chatJid = update.key.remoteJid;
-          if (chatJid) {
-            autoReplyEngine.registerOwnerRead(chatJid);
-          }
-        }
-      }
-    });
-
-    this.socket.ev.on('message-receipt.update', async (events) => {
-      for (const event of events) {
-        if (event.receipt.readTimestamp) {
-          const chatJid = event.key.remoteJid;
-          if (chatJid) {
-            autoReplyEngine.registerOwnerRead(chatJid);
-          }
-        }
-      }
-    });
   }
 
   public async requestPairingCode(phoneNumber: string): Promise<string> {
@@ -293,7 +287,11 @@ export class BaileysProvider implements IWhatsAppProvider {
     if (options?.mentions) {
       sendOptions.mentions = options.mentions;
     }
-    return await this.socket.sendMessage(chatJid, { text }, sendOptions);
+    const result = await this.socket.sendMessage(chatJid, { text }, sendOptions);
+    if (result?.key?.id) {
+      BaileysProvider.trackSentMessage(result.key.id);
+    }
+    return result;
   }
 
   public async sendMedia(
@@ -332,7 +330,11 @@ export class BaileysProvider implements IWhatsAppProvider {
       sendOptions.mentions = options.mentions;
     }
 
-    return await this.socket.sendMessage(chatJid, content, sendOptions);
+    const result = await this.socket.sendMessage(chatJid, content, sendOptions);
+    if (result?.key?.id) {
+      BaileysProvider.trackSentMessage(result.key.id);
+    }
+    return result;
   }
 
   public async sendPresence(chatJid: string, presence: 'composing' | 'recording' | 'available' | 'unavailable'): Promise<void> {

@@ -9,6 +9,7 @@ import logger from '../logger/logger.js';
 import { healthMonitor } from '../monitoring/health-check.js';
 import monitorService from '../../services/automation/monitor-service.js';
 import pollService from '../../services/automation/poll-service.js';
+import { BaileysProvider } from '../bot/baileys-provider.js';
 
 /**
  * Bot startup timestamp — messages sent before the bot started or older than 90s are ignored.
@@ -230,8 +231,11 @@ export class MessageHandler {
         });
       }
     } else {
-      // Owner sent a message
-      autoReplyEngine.registerOwnerReply(chatJid, text);
+      // Owner sent a message — Only record manual human typing, ignore automated bot replies
+      const isBotGenerated = BaileysProvider.isBotSentMessage(rawMessage.key.id);
+      if (!isBotGenerated) {
+        autoReplyEngine.registerOwnerReply(chatJid, text);
+      }
     }
 
     // 3. Keyword Monitor — Check group messages for watched keywords
