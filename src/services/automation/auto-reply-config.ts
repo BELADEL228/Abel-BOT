@@ -19,21 +19,21 @@ export class AutoReplyConfig {
   private static instance: AutoReplyConfig;
 
   // ── Machine à états ───────────────────────────────────────────────────
-  public state: AutoReplyState = 'OFF';
-  private _previousState: AutoReplyState = 'OFF';  // ✅ Sauvegarde le dernier état avant PAUSED
+  public state: AutoReplyState = 'ON';
+  private _previousState: AutoReplyState = 'ON';
 
   // ── Paramètres ────────────────────────────────────────────────────────
-  public cooldownHours: number = 6;
-  public maxPerHour: number = 20;
+  public cooldownHours: number = 2;
+  public maxPerHour: number = 50;
   private hourlyCount: number = 0;
   private hourlyWindowStart: number = Date.now();
-  public minDelaySeconds: number = 5;
-  public maxDelaySeconds: number = 20;
-  public humanActiveWindowMinutes: number = 15;
+  public minDelaySeconds: number = 3;
+  public maxDelaySeconds: number = 8;
+  public humanActiveWindowMinutes: number = 5;
   public vacationUntil: Date | null = null;
   public schedule: ScheduleConfig | null = null;
   public groupsEnabled: boolean = false;
-  private prismaAvailable: boolean = true;  // ✅ Track Prisma availability
+  private prismaAvailable: boolean = true;
 
   public urgentKeywords: Set<string> = new Set([
     'urgent', 'urgence', 'serveur', 'paiement', 'deadline',
@@ -44,7 +44,7 @@ export class AutoReplyConfig {
   public ignoredGroups: Set<string> = new Set();
 
   public trivialPatterns: RegExp[] = [
-    /^(ok|okay|ок|d'acc(ord)?|dac|👍|🙏|😂|😅|🤣|👌|haha|mdr|lol|rires?|xd|✅|🔥|❤️|😍|🥰|😘|😊|😁|yep|ouais|oui|non|no|yes|nope|tkt|np|ça va|ca va|bien|bien reçu|reçu|compris|noted)$/i
+    /^(\p{Extended_Pictographic}|\.|\?|!|\+)+$/u
   ];
 
   private constructor() {}
@@ -337,7 +337,9 @@ export class AutoReplyConfig {
 
   public isTrivialMessage(text: string): boolean {
     const trimmed = text.trim();
-    if (trimmed.split(/\s+/).length <= 1) return true;
+    if (!trimmed) return true;
+
+    // Only drop pure single reaction emojis / symbols
     for (const pattern of this.trivialPatterns) {
       if (pattern.test(trimmed)) return true;
     }

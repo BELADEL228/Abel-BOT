@@ -100,6 +100,7 @@ export class AutoReplyEngine {
 
   // ── Human tracking (read receipts + active chats) ─────────────────────────────
   private humanReadChats: Map<string, number> = new Map();
+  private providers: Map<string, IWhatsAppProvider> = new Map();
 
   // ── Owner reminder timers ─────────────────────────────────────────────────────
   private ownerReminderTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -159,18 +160,15 @@ export class AutoReplyEngine {
     contextManager.addMessage(chatJid, 'contact', text);
     contactStore.recordIncomingMessage(senderJid, senderName);
 
-    // Store provider reference on contact for later use in queue
-    (this as any)._lastProvider = provider;
-    (this as any)._providers = (this as any)._providers || new Map();
-
-    // Limit _providers to prevent unbounded growth
-    const MAX_PROVIDERS = 1000;
-    if ((this as any)._providers.size >= MAX_PROVIDERS) {
-      (this as any)._providers.clear();
-      logger.debug('[AutoReplyEngine] Cleared _providers Map (exceeded limit)');
+    // Store provider reference for this chat
+    if (!this.providers) {
+      this.providers = new Map();
     }
-
-    (this as any)._providers.set(chatJid, provider);
+    if (this.providers.size >= 1000) {
+      const oldestKey = this.providers.keys().next().value;
+      if (oldestKey) this.providers.delete(oldestKey);
+    }
+    this.providers.set(chatJid, provider);
 
     // Feed through debouncer (messages arriving quickly will be batched together)
     messageDebouncer.push(chatJid, senderJid, senderName, text, isGroup);
@@ -185,8 +183,11 @@ export class AutoReplyEngine {
     text: string,
     isGroup: boolean
   ): Promise<void> {
-    const provider: IWhatsAppProvider | undefined = (this as any)._providers?.get(chatJid);
-    if (!provider) return;
+    const provider: IWhatsAppProvider | undefined = this.providers?.get(chatJid);
+    if (!provider) {
+      logger.warn(`[AutoReplyEngine] No provider available for ${chatJid}, skipping.`);
+      return;
+    }
 
     // ═══ STEP 1: ABSOLUTE GATEKEEPERS (0ms, 0 IA) ══════════════════════════════
 
@@ -540,7 +541,7 @@ export class AutoReplyEngine {
       reason,
       sentAt: Date.now()
     });
-    logger.debug(`[AutoReplyEngine] IGNORE ${chatJid} — reason: ${reason}`);
+    logger.info(`[AutoReplyEngine] IGNORE ${chatJid} — raison: ${reason} (message: "${text.slice(0, 40)}")`);
   }
 
   // ─── LEGACY COMPAT (follow-ups / reminders) ───────────────────────────────────
