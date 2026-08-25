@@ -8,7 +8,7 @@ const DownloadCommand: IPluginCommand = {
     'youtube', 'yt', 'ytmp4', 'ytmp3', 'video',
     'instagram', 'ig', 'igdl', 'igaudio',
     'facebook', 'fb', 'fbaudio', 'twitter', 'twdl',
-    'capcut', 'song', 'song2', 'spotify', 'mediafire', 'pin', 'pixabay', 'image', 'apk', 'yts'
+    'capcut', 'mediafire', 'pin', 'pixabay', 'image', 'apk', 'yts'
   ],
   category: 'Download',
   description: 'Téléchargement de contenu média : TikTok (vidéo/audio sans filigrane), YouTube (MP4/MP3), Instagram, etc.',
